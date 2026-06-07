@@ -1,12 +1,3 @@
 # Ignore outputs folder
-outputs/
+outputs/random_forest.pkl
 
-# Ignore dataset folder
-dataset/
-
-# Ignore python cache
-__pycache__/
-*.pyc
-
-# Ignore all pickle files just in case
-*.pkl
