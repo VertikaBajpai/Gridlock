@@ -13,6 +13,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor, AdaBoostRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 import xgboost as xgb
@@ -322,6 +323,27 @@ lgb_model.fit(
 evaluate("LightGBM", y_val, lgb_model.predict(X_val))
 lgb_model.booster_.save_model(os.path.join(OUT, "lightgbm.txt"))
 
+# Random Forest
+print("\n  Training: Random Forest")
+rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+rf_model.fit(X_train, y_train)
+evaluate("Random Forest", y_val, rf_model.predict(X_val))
+joblib.dump(rf_model, os.path.join(OUT, "random_forest.pkl"))
+
+# AdaBoost
+print("\n  Training: AdaBoost")
+ada_model = AdaBoostRegressor(n_estimators=100, random_state=42)
+ada_model.fit(X_train, y_train)
+evaluate("AdaBoost", y_val, ada_model.predict(X_val))
+joblib.dump(ada_model, os.path.join(OUT, "adaboost.pkl"))
+
+# Gradient Boosting
+print("\n  Training: Gradient Boosting")
+gb_model = GradientBoostingRegressor(n_estimators=100, random_state=42)
+gb_model.fit(X_train, y_train)
+evaluate("Gradient Boosting", y_val, gb_model.predict(X_val))
+joblib.dump(gb_model, os.path.join(OUT, "gradient_boosting.pkl"))
+
 # ---------------------------------------------
 # 11. Basic Neural Network
 # ---------------------------------------------
@@ -511,6 +533,6 @@ plt.close()
 print("\n[DONE] All outputs saved to:", OUT)
 print("  Plots   : eda.png, correlation.png, model_comparison.png, feature_importance.png, nn_training_curves.png")
 print("  Weights : basic_nn_best.pt, shallow_nn_best.pt")
-print("  Models  : xgboost.json, lightgbm.txt, linear_regression.pkl, ridge_regression.pkl, svr.pkl")
+print("  Models  : xgboost.json, lightgbm.txt, linear_regression.pkl, ridge_regression.pkl, svr.pkl, random_forest.pkl, adaboost.pkl, gradient_boosting.pkl")
 print("  Scaler  : scaler.pkl")
 print("  Results : model_results.csv")

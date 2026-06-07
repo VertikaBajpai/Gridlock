@@ -1,0 +1,12 @@
+# Ignore outputs folder
+outputs/
+
+# Ignore dataset folder
+dataset/
+
+# Ignore python cache
+__pycache__/
+*.pyc
+
+# Ignore all pickle files just in case
+*.pkl
