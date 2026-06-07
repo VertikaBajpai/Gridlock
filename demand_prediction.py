@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os, joblib
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.svm import SVR
@@ -119,9 +119,21 @@ def parse_timestamp(df):
     return df
 
 # ---------------------------------------------
+# 4.5. Outlier Removal
+# ---------------------------------------------
+print("\n[4.5] Outlier Removal (Quantile Clipping)...")
+num_cols = train_raw.select_dtypes(include=np.number).columns
+for col in num_cols:
+    q_low = train_raw[col].quantile(0.01)
+    q_high = train_raw[col].quantile(0.99)
+    train_raw[col] = train_raw[col].clip(lower=q_low, upper=q_high)
+    if col in test_raw.columns:
+        test_raw[col] = test_raw[col].clip(lower=q_low, upper=q_high)
+
+# ---------------------------------------------
 # 5. Feature Engineering
 # ---------------------------------------------
-print("\n[4] Feature Engineering...")
+print("\n[5] Feature Engineering...")
 train_raw = add_geohash_features(train_raw)
 test_raw  = add_geohash_features(test_raw)
 
@@ -257,18 +269,27 @@ print("  Scaler saved -> outputs/scaler.pkl")
 # ---------------------------------------------
 results = []
 
-def evaluate(name, y_true, y_pred):
-    mae  = mean_absolute_error(y_true, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-    r2   = r2_score(y_true, y_pred)
-    mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-9))) * 100
+def evaluate(name, y_true_train, y_pred_train, y_true_val, y_pred_val):
+    def get_metrics(y_true, y_pred):
+        mae  = mean_absolute_error(y_true, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+        r2   = r2_score(y_true, y_pred)
+        mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-9))) * 100
+        return mae, rmse, r2, mape
+        
+    mae_t, rmse_t, r2_t, mape_t = get_metrics(y_true_train, y_pred_train)
+    mae_v, rmse_v, r2_v, mape_v = get_metrics(y_true_val, y_pred_val)
+    
     print(f"\n  [{name}]")
-    print(f"    MAE  : {mae:.5f}")
-    print(f"    RMSE : {rmse:.5f}")
-    print(f"    R2   : {r2:.5f}")
-    print(f"    MAPE : {mape:.2f}%")
-    results.append({'Model': name, 'MAE': mae, 'RMSE': rmse, 'R2': r2, 'MAPE(%)': mape})
-    return y_pred
+    print(f"    Train -> MAE: {mae_t:.5f} | RMSE: {rmse_t:.5f} | R2: {r2_t:.5f} | MAPE: {mape_t:.2f}%")
+    print(f"    Val   -> MAE: {mae_v:.5f} | RMSE: {rmse_v:.5f} | R2: {r2_v:.5f} | MAPE: {mape_v:.2f}%")
+    
+    results.append({
+        'Model': name, 
+        'Train_MAE': mae_t, 'Train_RMSE': rmse_t, 'Train_R2': r2_t, 'Train_MAPE(%)': mape_t,
+        'Val_MAE': mae_v, 'Val_RMSE': rmse_v, 'Val_R2': r2_v, 'Val_MAPE(%)': mape_v
+    })
+    return y_pred_val
 
 # ---------------------------------------------
 # 10. ML Models
@@ -280,21 +301,21 @@ print("-" * 50)
 print("\n  Training: Linear Regression")
 lr = LinearRegression()
 lr.fit(X_train_sc, y_train)
-evaluate("Linear Regression", y_val, lr.predict(X_val_sc))
+evaluate("Linear Regression", y_train, lr.predict(X_train_sc), y_val, lr.predict(X_val_sc))
 joblib.dump(lr, os.path.join(OUT, "linear_regression.pkl"))
 
 # Ridge Regression
 print("\n  Training: Ridge Regression")
 ridge = Ridge(alpha=1.0)
 ridge.fit(X_train_sc, y_train)
-evaluate("Ridge Regression", y_val, ridge.predict(X_val_sc))
+evaluate("Ridge Regression", y_train, ridge.predict(X_train_sc), y_val, ridge.predict(X_val_sc))
 joblib.dump(ridge, os.path.join(OUT, "ridge_regression.pkl"))
 
 # SVR (on subset for speed)
 print("\n  Training: SVR (subset of 10k samples for speed)")
 svr = SVR(kernel='rbf', C=10, epsilon=0.01)
 svr.fit(X_train_sc[:10000], y_train[:10000])
-evaluate("SVR (RBF)", y_val, svr.predict(X_val_sc))
+evaluate("SVR (RBF)", y_train[:10000], svr.predict(X_train_sc[:10000]), y_val, svr.predict(X_val_sc))
 joblib.dump(svr, os.path.join(OUT, "svr.pkl"))
 
 # XGBoost
@@ -305,7 +326,7 @@ xgb_model = xgb.XGBRegressor(
     random_state=42, n_jobs=-1, verbosity=0
 )
 xgb_model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-evaluate("XGBoost", y_val, xgb_model.predict(X_val))
+evaluate("XGBoost", y_train, xgb_model.predict(X_train), y_val, xgb_model.predict(X_val))
 xgb_model.save_model(os.path.join(OUT, "xgboost.json"))
 
 # LightGBM
@@ -320,28 +341,42 @@ lgb_model.fit(
     eval_set=[(X_val, y_val)],
     callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=-1)]
 )
-evaluate("LightGBM", y_val, lgb_model.predict(X_val))
+evaluate("LightGBM", y_train, lgb_model.predict(X_train), y_val, lgb_model.predict(X_val))
 lgb_model.booster_.save_model(os.path.join(OUT, "lightgbm.txt"))
 
 # Random Forest
-print("\n  Training: Random Forest")
-rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-rf_model.fit(X_train, y_train)
-evaluate("Random Forest", y_val, rf_model.predict(X_val))
+print("\n  Training: Random Forest (Fine-Tuning)")
+param_dist = {
+    'n_estimators': [50, 100, 200],
+    'max_depth': [None, 10, 20, 30],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4],
+    'max_features': [1.0, 'sqrt', 'log2']
+}
+rf_base = RandomForestRegressor(random_state=42, n_jobs=-1)
+rf_search = RandomizedSearchCV(
+    estimator=rf_base, param_distributions=param_dist,
+    n_iter=10, cv=3, scoring='neg_mean_squared_error',
+    random_state=42, n_jobs=-1, verbose=1
+)
+rf_search.fit(X_train, y_train)
+print(f"    Best params: {rf_search.best_params_}")
+rf_model = rf_search.best_estimator_
+evaluate("Random Forest", y_train, rf_model.predict(X_train), y_val, rf_model.predict(X_val))
 joblib.dump(rf_model, os.path.join(OUT, "random_forest.pkl"))
 
 # AdaBoost
 print("\n  Training: AdaBoost")
 ada_model = AdaBoostRegressor(n_estimators=100, random_state=42)
 ada_model.fit(X_train, y_train)
-evaluate("AdaBoost", y_val, ada_model.predict(X_val))
+evaluate("AdaBoost", y_train, ada_model.predict(X_train), y_val, ada_model.predict(X_val))
 joblib.dump(ada_model, os.path.join(OUT, "adaboost.pkl"))
 
 # Gradient Boosting
 print("\n  Training: Gradient Boosting")
 gb_model = GradientBoostingRegressor(n_estimators=100, random_state=42)
 gb_model.fit(X_train, y_train)
-evaluate("Gradient Boosting", y_val, gb_model.predict(X_val))
+evaluate("Gradient Boosting", y_train, gb_model.predict(X_train), y_val, gb_model.predict(X_val))
 joblib.dump(gb_model, os.path.join(OUT, "gradient_boosting.pkl"))
 
 # ---------------------------------------------
@@ -409,8 +444,9 @@ for ep in range(1, EPOCHS+1):
 bnn.load_state_dict(torch.load(os.path.join(OUT, "basic_nn_best.pt"), map_location=device, weights_only=True))
 bnn.eval()
 with torch.no_grad():
+    bnn_preds_tr = bnn(X_tr_t).cpu().numpy().squeeze()
     bnn_preds = bnn(X_vl_t).cpu().numpy().squeeze()
-evaluate("Basic Neural Network", y_val, bnn_preds)
+evaluate("Basic Neural Network", y_train, bnn_preds_tr, y_val, bnn_preds)
 
 plt.figure(figsize=(8, 4))
 plt.plot(bnn_tr_loss, label='Train MSE')
@@ -469,8 +505,9 @@ for ep in range(1, EPOCHS_S+1):
 snn.load_state_dict(torch.load(os.path.join(OUT, "shallow_nn_best.pt"), map_location=device, weights_only=True))
 snn.eval()
 with torch.no_grad():
+    snn_preds_tr = snn(X_tr_t).cpu().numpy().squeeze()
     snn_preds = snn(X_vl_t).cpu().numpy().squeeze()
-evaluate("Shallow Neural Network", y_val, snn_preds)
+evaluate("Shallow Neural Network", y_train, snn_preds_tr, y_val, snn_preds)
 
 plt.figure(figsize=(8, 4))
 plt.plot(snn_tr_loss, label='Train MSE')
@@ -487,7 +524,7 @@ print("  Shallow NN weights saved -> outputs/shallow_nn_best.pt")
 print("\n" + "="*60)
 print("MODEL COMPARISON SUMMARY (Validation Set)")
 print("="*60)
-results_df = pd.DataFrame(results).sort_values('RMSE')
+results_df = pd.DataFrame(results).sort_values('Val_RMSE')
 print(results_df.to_string(index=False))
 results_df.to_csv(os.path.join(OUT, "model_results.csv"), index=False)
 
@@ -496,7 +533,7 @@ fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 fig.suptitle("Model Comparison - Validation Set", fontsize=13, fontweight='bold')
 colors = plt.cm.viridis(np.linspace(0.2, 0.85, len(results_df)))
 
-for ax, metric in zip(axes, ['MAE','RMSE','R2']):
+for ax, metric in zip(axes, ['Val_MAE','Val_RMSE','Val_R2']):
     bars = ax.barh(results_df['Model'], results_df[metric], color=colors)
     ax.set_xlabel(metric); ax.set_title(f"Val {metric}"); ax.invert_yaxis()
     for bar, val in zip(bars, results_df[metric]):
